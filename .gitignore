@@ -1,0 +1,6 @@
+# Materijali predavanja/vezbi (autorsko pravo fakulteta) -- ne komitovati
+*.pdf
+*.pptx
+*.zip
+transfer/
+!EOS Vault/**
