@@ -10,7 +10,7 @@ prepoznavanje šahovskih figura) na Zybo ploči (Zynq-7010).
 | # | Predmet | Šta radi | Status |
 |---|---|---|---|
 | 1 | PEUSN | ESL/SystemC (TLM) model — referenca | ✅ gotovo (ranije) |
-| 2 | PSDS | RTL (ručni VHDL) → sinteza → IP → block design → bitstream → **bare-metal Vitis app** | ✅ **GOTOVO** — FEN tačan na ploči, 32/32, 1.782 ms |
+| 2 | PSDS | RTL (ručni VHDL) → sinteza → IP → block design → bitstream → **bare-metal Vitis app** | ✅ **GOTOVO** — FEN tačan na ploči, 32/32, 1.782 s |
 | 3 | FVH | SV/UVM verifikacija istog `ncc_accel` IP-a | ✅ **GOTOVO** — 7/7 koraka, 100% coverage, 27/27 regresija |
 | 4 | **EOS** | **Pravi Linux kernel drajver** za `ncc_accel` na istoj ploči/bitstream-u | 🔲 **OVDE SMO** |
 

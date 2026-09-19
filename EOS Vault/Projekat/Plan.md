@@ -179,3 +179,105 @@ merenje iz Koraka 8, poznata ograničenja.
   Sledeće nakon uspešnog builda: Korak 2 (device tree čvor za ncc_accel — verovatno već
   auto-generisan iz Vivado IP-a, samo proveriti/prilagoditi `compatible` string), pa Korak
   3 (platform driver skelet).
+- 2026-09-10: **Korak 1 GOTOV — petalinux-build uspešno završen u 13:01** (5953/5953
+  taskova, nula grešaka). Slike u `~/EOS/ncc_plat/images/linux/` na VM-u (`image.ub`,
+  `rootfs.ext4`, `u-boot.elf`, `system.bit`, `system.dtb`, itd.), `rootfs.manifest`
+  potvrđuje 293 paketa uključujući `nfs-utils`, `openssl`. Put do tu nije bio nimalo
+  gladak: VM se prvo tvrdo zamrzla usred noći (00:52, I/O stall tokom setscene faze),
+  a onda su tri dodatna "restarta" na sumnju od zamrzavanja (koje je zapravo bila samo
+  spora VM pod I/O opterećenjem, ne stvarna zamrznutost — potvrđeno host-side VBox.log
+  analizom) prouzrokovala 4 sloja tihe korupcije (`poweroff` = hard power cut, ne clean
+  shutdown): oštećene sstate arhive, prazni RPM paketi, prazni license fajlovi, prazni
+  SPDX fajlovi — svi popravljeni, sistemska skripta za čišćenje ostavljena na VM-u
+  (`~/EOS/fix-and-rebuild4.sh`). Naučena lekcija: pre gašenja VM-a uvek prvo proveriti
+  da li je stvarno zamrznuta (poruka+čekanje, `screenshotpng`, kernel hung-task log), i
+  koristiti `acpipowerbutton` umesto `poweroff` ako restart ipak treba.
+  Sledeće: Korak 2 (device tree čvor za ncc_accel), čeka Stefanovu potvrdu pre starta.
+- 2026-09-10 (nastavak): **Korak 2 potvrđen, Korak 3 + deo Koraka 5 (mmap) napisani i
+  ČISTO KOMPAJLIRAJU** (nula grešaka), još NIJE testirano na ploči (insmod/probe).
+  Device tree: dva odvojena čvora `ncc_accel@50000000`/`@51000000`, svaki sa DVA reg
+  tuple-a (S00 4K + S01 128K), `compatible = "xlnx,ncc-accel-1.0"` — potvrđeno da nema
+  `interrupts` property ni na jednoj instanci (poznato od ranije, samo dodatna
+  potvrda). Kod: `driver/ncc_accel.c` (host) = `project-spec/meta-user/recipes-modules/
+  ncc-accel/files/ncc-accel.c` (VM; recept mora imati crticu u imenu, PetaLinux ne
+  dozvoljava `_`, `DRV_NAME`/`modinfo name` ostaju `ncc_accel`). Sadrži: probe/remove,
+  određivanje instance (ncc0/ncc1) po fizičkoj S00 adresi (ne po redosledu probe()
+  poziva), i `.mmap` za S01 region (`io_remap_pfn_range`, `pgprot_noncached`,
+  analogno Xil_Out32/In32 bez keš-problema). `ioctl` namerno izostavljen za sledeći
+  prolaz.
+  Ciljni kernel: **linux-xlnx 6.12.40+git** (PetaLinux 2025.2) — dva API pomeranja u
+  odnosu na stariji kernel, oba primenjena: `class_create()` bez `THIS_MODULE`
+  argumenta, `platform_driver.remove` vraća `void` ne `int`. `ncc-accel.ko` (9032B)
+  ušao u rootfs sliku (`petalinux-create -t modules --enable`), `modinfo` alias se
+  tačno poklapa sa device tree `compatible`.
+  Sledeće: `insmod`/probe test na pravoj Zybo ploči — ČEKA Stefana (fizički pristup
+  ploči/UART-u, van dometa VM/host sesije).
+- 2026-09-10 (nastavak 3): **`insmod`/probe test USPEŠAN na pravoj ploči** — `probe()`
+  ispravno prepoznao obe instance (`/dev/ncc0`, `/dev/ncc1`, major 244), tačne
+  fizičke/virtuelne adrese u dmesg-u. `compatible = "xlnx,ncc-accel-1.0"` potvrđen u
+  praksi. Login: korisnik `petalinux`, prazna lozinka (root zaključan u `/etc/shadow`);
+  rootfs je initrd u RAM-u — sve promene (lozinka, insmod) nestaju pri restartu, ali
+  `ncc-accel.ko` je već ugrađen i auto-učitan pri boot-u.
+
+  **Korak 5 (ioctl deo) integrisan i testiran end-to-end.** `NCC_SET_DIMS`/`NCC_START`/
+  `NCC_WAIT_DONE` dodati u `driver/ncc_accel.c`, UAPI izdvojen u `driver/ncc_accel_uapi.h`
+  (deljen sa userspace testom). Usput otkriven i ispravljen bag u validaciji: piksel je
+  32-bitna reč (4B), ne 1B (CLAUDE.md, "Memorije S01") — sa ispravkom, region SLIKE
+  (8192 reči, ~90×90) je vezujući limit, ne region rezultata kako je prvobitno
+  pretpostavljeno.
+
+  Bring-up test (`driver/test_ioctl.c`, kompajliran kroz Yocto app recept `ncc-test`
+  jer rootfs nema toolchain — `petalinux-image-minimal` ne uključuje gcc/kernel-devsrc)
+  **PROŠAO na oba akceleratora**: `NCC_SET_DIMS`/`NCC_START`/`NCC_WAIT_DONE` uspešni,
+  BEZ timeout-a (0.02ms za sintetički 4×4/2×2 test) — potvrđuje da `done_sticky`/`busy`
+  konjunkcija u `ncc_poll_done` radi ispravno na pravom hardveru, ne samo teoretski.
+  Rezultati su smisleni brojevi (Q1.31), ne garbage.
+
+  **Korak 3 i Korak 5 su potpuno gotovi i potvrđeni na hardveru.**
+  Sledeće: **Korak 6** — port userspace aplikacije (`ncc_hw.c`/`ncc_app.c` iz PSDS
+  bare-metal-a) na Linux ioctl+mmap, sa pravim šahovskim slikama/šablonima, cilj
+  identičan FEN kao bare-metal/FVH/PSDS.
+- 2026-09-10 (nastavak 4): **KORAK 6 ZAVRŠEN — FEN se tačno poklapa na pravom
+  hardveru.** Port `app/` (host) = Yocto app recept `ncc-scan` (VM,
+  `petalinux-create apps --template c --name ncc-scan --enable`, ime mora imati
+  crticu isto kao modul). Podaci (`data_board.c`/`data_golden.c`/`data_tmpl.c`) i
+  čista logika (`ncc_logic.c/h`) prekopirani NEPROMENJENI iz PSDS bare-metal-a.
+  Menjano samo: `ncc_hw.c/h` (Xil_Out32/In32 -> ioctl NCC_SET_DIMS/START/WAIT_DONE
+  + mmap S01, isti API tako da `ncc_app.c`/`ncc_logic.c` ostaju netaknuti),
+  `ncc_app.c` (samo profiling XTime->clock_gettime), `main.c` (samo
+  xil_printf/XTime -> printf/clock_gettime). Uzgred: VM se sinoć srušila usred
+  ovog Koraka zbog PRAVOG Windows Hyper-V (WHP) pada na host strani
+  (`WHvGetVirtualProcessorState -> ERROR_NO_SYSTEM_RESOURCES`, VM state
+  `GURU_MEDITATION`/"Stuck") — nezavisno od gosta/build-a, rešeno restartom
+  `VBoxSDS` servisa (stale lock) i VM-a; build je ponovljen od nule na novoj VM
+  sesiji bez gubitka pravca.
+
+  **Test na ploči (`sudo ncc-scan`):**
+  ```
+  FEN:       rnbqkbnr/pp5p/4ppp1/2pp4/5P2/1P1BPN2/P1PPQ1PP/RNB1K2R
+  ocekivano: rnbqkbnr/pp5p/4ppp1/2pp4/5P2/1P1BPN2/P1PPQ1PP/RNB1K2R
+  Rezultat se poklapa sa ocekivanom pozicijom.
+  ```
+  32/32 polja tačna, identično PSDS/FVH referenci. Vreme: 1906.495 ms ukupno,
+  od čega "cekanje jezgra" (PL računanje) 1676.556 ms = **87.9%** — upadljivo se
+  poklapa sa Korakom 8 dole ("PL računanje ostaje dominantno, ~87%").
+
+  **POTVRĐENO (provera u PSDS_dokumentacija_y25-g10_Korak2-8.html:2150):**
+  bare-metal referenca JESTE 1.782 SEKUNDE, ne milisekunde — pipeline
+  tabela/CLAUDE.md je imala pogrešnu jedinicu (zbir pod-vremena 1555+120+67+40
+  = 1782 ms ostao označen "ms" umesto pretvoren u "s"; dokaz: PSDS dokument
+  eksplicitno kaže "1,782 s — 2,06× brže" od reference 3,667s — matematika radi
+  samo u sekundama). CLAUDE.md ispravljen (2026-09-10).
+
+  **KORAK 8 ZATVOREN:** Linux (1.906s) je ~7% sporiji od bare-metal-a (1.782s)
+  — tačno u očekivanom opsegu, PL računanje ostaje dominantno (87.9% na Linuxu
+  nasuprot ~87% bare-metal), syscall/ioctl/mmap overhead je mali kako je i
+  predviđeno.
+
+  **KORAK 7 PRESKOČEN** — DMA se nije koristio ni u PSDS-u (bare-metal) ni u
+  FVH-u (verifikacija), pa nema smisla uvoditi ga ovde kao izolovanu vežbu.
+  Odluka iz Koraka 1 (bez DMA za podatke, zbog burst>2-beat ograničenja na
+  axi_interconnect_0) ostaje dokumentovana kao razlog; nema dodatnog
+  sintetičkog DMA primera.
+
+  Sledeće: Korak 9 (dokumentacija) — poslednji preostali korak.

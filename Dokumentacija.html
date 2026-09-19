@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="UTF-8">
+<title>EOS — Linux drajver za ncc_accel</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body {
+    font-family: "Segoe UI", Calibri, Arial, sans-serif;
+    color: #1a1a1a;
+    max-width: 820px;
+    margin: 40px auto;
+    line-height: 1.55;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 24px;
+    border-bottom: 2px solid #2c3e50;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+  }
+  h2 {
+    font-size: 17px;
+    color: #2c3e50;
+    margin-top: 32px;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 4px;
+  }
+  code {
+    background: #f2f2f2;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: Consolas, monospace;
+    font-size: 12.5px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  th, td {
+    border: 1px solid #ccc;
+    padding: 6px 10px;
+    text-align: left;
+  }
+  th {
+    background: #2c3e50;
+    color: white;
+  }
+  tr:nth-child(even) { background: #f7f7f7; }
+  .subtitle {
+    color: #666;
+    font-size: 12.5px;
+    margin-top: 0;
+    margin-bottom: 20px;
+  }
+  .mermaid { text-align: center; margin: 20px 0; }
+  p { margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>EOS — Linux drajver za ncc_accel akcelerator</h1>
+
+<h2>1. Arhitektura</h2>
+
+<div class="mermaid">
+flowchart TB
+    subgraph US["Userspace (ncc-scan)"]
+        A["main.c / ncc_app.c<br/>skeniranje 8x8 table, FEN"]
+        B["ncc_hw.c<br/>ioctl + mmap wrapper"]
+    end
+    subgraph K["Kernel (ncc_accel.c, platform driver)"]
+        C["ncc_ioctl()<br/>SET_DIMS / START / WAIT_DONE"]
+        D["ncc_mmap()<br/>io_remap_pfn_range"]
+    end
+    subgraph HW["Hardver (PL, FPGA)"]
+        E["S00 AXI-Lite<br/>IMG_W/H, TMP_W/H, CTRL, STATUS"]
+        F["S01 AXI-Full<br/>slika / sablon / rezultat, 128K"]
+    end
+
+    A --> B
+    B -- "ioctl" --> C
+    B -- "mmap" --> D
+    C -- "ioread32/iowrite32" --> E
+    D -- "direktno mapiran (bez copy_to/from_user)" --> F
+    E --> G["ncc_accel IP jezgro"]
+    F --> G
+</div>
+
+<p>Dve nezavisne instance akceleratora (<code>ncc0</code>, <code>ncc1</code>) daju dva nezavisna Linux uređaja,
+<code>/dev/ncc0</code> i <code>/dev/ncc1</code>, sa sopstvenim <code>probe()</code>/<code>cdev</code>/mutex-om po instanci. Aplikacija
+ih koristi paralelno — dok jedan računa, drugi može da počne sledeći posao — isto kao što
+je bare-metal Vitis app radio ova dva jezgra nezavisno.</p>
+
+<p>Kontrolni put (<code>ioctl</code>) i podatkovni put (<code>mmap</code>) su namerno razdvojeni. Kontrolne
+komande su retke i male (postavi dimenzije, pokreni, čekaj gotovo), pa im odgovara
+<code>ioctl</code>. Slika, šablon i rezultat su veliki blokovi (do 128K po instanci) kojima
+aplikacija pristupa često i nasumično, pa im <code>mmap</code> daje direktan pristup bez
+<code>copy_to_user</code>/<code>copy_from_user</code> po pikselu — identično ponašanje kao <code>Xil_Out32</code>/<code>Xil_In32</code>
+petlje u bare-metal-u, samo iz userspace-a.</p>
+
+<h2>2. Registri i memorija</h2>
+
+<p>Registri na S00 (AXI-Lite, po instanci, 4K opseg, validno 0x00–0x3F):</p>
+
+<table>
+<tr><th>Offset</th><th>Registar</th><th>Napomena</th></tr>
+<tr><td><code>0x00</code></td><td><code>IMG_W</code></td><td>širina slike (8 bita)</td></tr>
+<tr><td><code>0x04</code></td><td><code>IMG_H</code></td><td>visina slike</td></tr>
+<tr><td><code>0x08</code></td><td><code>TMP_W</code></td><td>širina šablona</td></tr>
+<tr><td><code>0x0C</code></td><td><code>TMP_H</code></td><td>visina šablona</td></tr>
+<tr><td><code>0x10</code></td><td><code>IMG_ADDR</code></td><td>rezervisano, bez efekta na hardver (potvrđeno u RTL-u)</td></tr>
+<tr><td><code>0x14</code></td><td><code>TMP_ADDR</code></td><td>rezervisano, bez efekta na hardver (potvrđeno u RTL-u)</td></tr>
+<tr><td><code>0x30</code></td><td><code>CTRL</code></td><td>upis 1 = start, briše <code>done_sticky</code></td></tr>
+<tr><td><code>0x34</code></td><td><code>STATUS</code></td><td>bit0 = <code>done_sticky</code> (read-only), bit1 = <code>busy</code></td></tr>
+</table>
+
+<p><code>IMG_ADDR</code>/<code>TMP_ADDR</code> su proverom PSDS VHDL izvora (<code>ncc_accel_slave_lite_v1_0_S00_AXI.vhd</code>)
+potvrđeni kao loopback registri bez ijednog porta ka <code>ncc_core</code> — upis pa čitanje vraća
+upisanu vrednost, ali jezgro tu vrednost nikad ne koristi. Umesto toga, jezgro uvek čita
+sa fiksnih offseta u S01:</p>
+
+<table>
+<tr><th>Region</th><th>Offset u S01</th><th>Kapacitet</th><th>Napomena</th></tr>
+<tr><td>slika</td><td><code>+0x00000</code></td><td>32 KB = 8192 reči</td><td>do ~90×90</td></tr>
+<tr><td>šablon</td><td><code>+0x08000</code></td><td>32 KB = 8192 reči</td><td>do ~30×30</td></tr>
+<tr><td>rezultat</td><td><code>+0x10000</code></td><td>64 KB = 16384 reči</td><td>Q1.31 skor po poziciji prozora</td></tr>
+</table>
+
+<p>Piksel je jedna 32-bitna reč (4 bajta), ne jedan bajt — ovo je proveravano dvaput u
+razvoju drajvera jer je lako pretpostaviti suprotno, i pogrešna pretpostavka bi propustila
+validaciju za slike do ~181×181 umesto stvarnog limita od ~90×90. Rezultati se porede kao
+<code>u32</code>, ne <code>int32</code> — <code>0x80000000</code> (savršeno poklapanje) je negativan broj kao potpisani tip,
+pa bi traženje maksimuma sa pogrešnim tipom odbacilo baš najbolji rezultat.</p>
+
+<p>IP nema <code>interrupts</code> property u device tree-u — nema hardverski prekid. <code>NCC_WAIT_DONE</code>
+zato anketira <code>STATUS</code> u petlji (<code>usleep_range(500, 1500)</code> između provera) umesto da čeka
+na IRQ, sa podrazumevanim timeout-om od 1000 ms i mogućnošću prekida signalom
+(<code>fatal_signal_pending</code>).</p>
+
+<h2>3. Merenje i poređenje (Korak 8)</h2>
+
+<p>Test slučaj: <code>board2.txt</code>, 90×90 segmenti po polju, 12 šablona (6 belih + 6 crnih figura),
+očekivani FEN sa 32 zauzeta polja.</p>
+
+<table>
+<tr><th></th><th>Bare-metal (Vitis)</th><th>Linux (ioctl+mmap)</th></tr>
+<tr><td>ukupno vreme</td><td>1.782 s</td><td>1.906 s</td></tr>
+<tr><td>FEN rezultat</td><td>tačan (32/32)</td><td>tačan (32/32)</td></tr>
+</table>
+
+<p>Razlika je oko 7%, u skladu sa očekivanjem da syscall/ioctl/mmap overhead ne bude
+dominantan — raspodela vremena na Linuxu potvrđuje to: "čekanje jezgra" (PL računanje)
+zauzima 1676.6 ms od ukupnih 1906.5 ms, odnosno 87.9%, gotovo identično bare-metal
+raspodeli (~87% PL računanje prema PSDS dokumentaciji). Ostatak (prenos u S01, čitanje
+rezultata) je razlog za blagi dodatni overhead u odnosu na direktne <code>Xil_Out32</code>/<code>Xil_In32</code>
+pozive, ali ne menja suštinski ukupno vreme.</p>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'default' });
+</script>
+
+</body>
+</html>
