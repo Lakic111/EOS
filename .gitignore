@@ -4,3 +4,5 @@
 *.zip
 transfer/
 !EOS Vault/**
+# Finalna dokumentacija (export iz EOS Vault/Projekat/Dokumentacija.md) -- zelimo je na git-u
+!/Dokumentacija.pdf
