@@ -6,3 +6,15 @@ transfer/
 !EOS Vault/**
 # Finalna dokumentacija (export iz EOS Vault/Projekat/Dokumentacija.md) -- zelimo je na git-u
 !/Dokumentacija.pdf
+
+# Izlazi build-a (make)
+*.o
+*.d
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+modules.order
+Module.symvers
+/driver/test_ioctl
+/app/ncc-scan
