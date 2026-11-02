@@ -18,3 +18,6 @@ modules.order
 Module.symvers
 /driver/test_ioctl
 /app/ncc-scan
+
+# Dokumentacija druge verzije (uproscene po vezbama)
+!/Dokumentacija_v2_uprosceno/*.pdf
