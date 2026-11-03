@@ -1,6 +1,6 @@
-# Prevodjenje modula ncc_driver.ko (isti oblik kao Makefile iz vezbe 9).
+# Builds the ncc_driver.ko module (same form as the Makefile from exercise 9).
 #
-# Za Zybo (ARM), protiv kernela iz PetaLinux projekta:
+# For the Zybo (ARM), against the kernel from the PetaLinux project:
 #   make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- KERNELDIR=<kernel build dir>
 
 # If KERNELRELEASE is defined, we've been invoked from
